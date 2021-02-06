@@ -1,3 +1,14 @@
+## Terraform Initialization
+terraform {
+  required_version = ">= 0.13"
+
+  required_providers {
+    vcd = {
+      source  = "vmware/vcd"
+      version = "3.1.0"
+    }
+  }
+}
 # Configure VMware vCloud Director Provider
 provider "vcd" {
   user                 = var.vcd_user
@@ -16,6 +27,13 @@ resource "vcd_org" "t1" {
   is_enabled       = "true"
   delete_recursive = "true"
   delete_force     = "true"
+
+  vapp_lease {
+    maximum_runtime_lease_in_sec          = 0
+    power_off_on_runtime_lease_expiration = false
+    maximum_storage_lease_in_sec          = 0
+    delete_on_storage_lease_expiration    = false
+  }
 }
 
 # Create Org VDC for above org
@@ -24,7 +42,7 @@ resource "vcd_org_vdc" "t1_ovdc01" {
 
   name              = var.t1_ovdc01_name
   description       = "Super dope organization VDC"
-  org               = var.org_name #variable referred in variable file
+  org               = var.org_name
   allocation_model  = "AllocationVApp"
   network_pool_name = var.network_pool_name
   provider_vdc_name = var.pvdc_name
@@ -75,13 +93,13 @@ resource "vcd_edgegateway" "t1_edge01" {
     subnet {
       use_for_default_route = true
 
-      ip_address = "10.67.39.110"
-      gateway    = "10.67.39.254"
+      ip_address = "10.67.29.110"
+      gateway    = "10.67.29.254"
       netmask    = "255.255.255.0"
 
       suballocate_pool {
-        start_address = "10.67.39.111"
-        end_address   = "10.67.39.119"
+        start_address = "10.67.29.111"
+        end_address   = "10.67.29.119"
       }
     }
   }
@@ -92,58 +110,13 @@ resource "vcd_edgegateway" "t1_edge01" {
     subnet {
       use_for_default_route = false
 
-      ip_address = "10.67.139.110"
-      gateway    = "10.67.139.254"
+      ip_address = "10.67.129.110"
+      gateway    = "10.67.129.254"
       netmask    = "255.255.255.0"
 
       suballocate_pool {
-        start_address = "10.67.139.111"
-        end_address   = "10.67.139.119"
-      }
-    }
-  }
-}
-
-resource "vcd_edgegateway" "t1_edge02" {
-  depends_on = [vcd_org_vdc.t1_ovdc01]
-
-  org                 = var.org_name
-  vdc                 = var.t1_ovdc01_name
-  name                = var.t1_edge02_name
-  description         = "T1 edge gateway"
-  configuration       = "compact"
-  distributed_routing = false
-
-  external_network {
-    name = var.external_network_v_pod02_internet
-
-    subnet {
-      use_for_default_route = true
-
-      ip_address = "10.67.39.120"
-      gateway    = "10.67.39.254"
-      netmask    = "255.255.255.0"
-
-      suballocate_pool {
-        start_address = "10.67.39.121"
-        end_address   = "10.67.39.129"
-      }
-    }
-  }
-
-  external_network {
-    name = var.external_network_v_pod02_service
-
-    subnet {
-      use_for_default_route = false
-
-      ip_address = "10.67.139.120"
-      gateway    = "10.67.139.254"
-      netmask    = "255.255.255.0"
-
-      suballocate_pool {
-        start_address = "10.67.139.121"
-        end_address   = "10.67.139.129"
+        start_address = "10.67.129.111"
+        end_address   = "10.67.129.119"
       }
     }
   }
@@ -170,7 +143,7 @@ resource "vcd_catalog_item" "photon_3" {
   name        = "photon-3.0"
   description = "Photon OS 3.0 Revision 2 Update3"
 
-  ova_path = "../resources/photon-hw11-3.0-a383732.ova"
+  ova_path = "resources/photon-hw11-3.0-a383732.ova"
 
   show_upload_progress = true
 }
@@ -195,12 +168,12 @@ resource "vcd_network_routed" "demo_net_routed_192_168_10" {
 }
 
 resource "vcd_network_routed" "demo_net_routed_192_168_20" {
-  depends_on = [vcd_edgegateway.t1_edge02]
+  depends_on = [vcd_edgegateway.t1_edge01]
 
   org          = var.org_name
   vdc          = var.t1_ovdc01_name
   name         = "routed_192.168.20.0"
-  edge_gateway = var.t1_edge02_name
+  edge_gateway = var.t1_edge01_name
 
   gateway = "192.168.20.1"
   dns1    = "8.8.8.8"
@@ -253,7 +226,7 @@ resource "vcd_vapp_vm" "vapp_xyz_web" {
   description   = "Web server ${count.index + 1}"
   catalog_name  = vcd_catalog.demo_catalog.name
   template_name = vcd_catalog_item.photon_3.name
-  memory        = 384
+  memory        = 512
   cpus          = 1
 
   network {
@@ -267,11 +240,27 @@ resource "vcd_vapp_vm" "vapp_xyz_web" {
     change_sid                 = true
     allow_local_admin_password = true
     auto_generate_password     = false
-    admin_password             = "SecuritY123!"
+    admin_password             = "SecuritY123!" # Doesn't work on Photon OS, need to debug, but customization fails without the parameter
     #initscript                 = "touch /tmp/romain"
   }
 
   accept_all_eulas = "true"
+}
+
+# Anti-affinity rule to separate VMs
+resource "vcd_vm_affinity_rule" "vapp_xyz_separate_web_servers" {
+  org = var.org_name
+  vdc = var.t1_ovdc01_name
+
+  name     = "Separate-VMs"
+  required = true
+  enabled  = true
+  polarity = "Anti-Affinity"
+
+  vm_ids = [
+    vcd_vapp_vm.vapp_xyz_web[0].id,
+    vcd_vapp_vm.vapp_xyz_web[1].id
+  ]
 }
 
 # SNAT rule to let the VMs' traffic out
@@ -279,10 +268,9 @@ resource "vcd_nsxv_snat" "vapp_xyz_snat" {
   org = var.org_name
   vdc = var.t1_ovdc01_name
 
-  edge_gateway = var.t1_edge01_name
-  network_type = "org"
-  network_name = vcd_network_routed.demo_net_routed_192_168_10.name
-
+  edge_gateway       = var.t1_edge01_name
+  network_type       = "ext"
+  network_name       = var.external_network_v_pod02_internet
   original_address   = "192.168.10.0/24"
   translated_address = vcd_edgegateway.t1_edge01.default_external_network_ip
 }
@@ -299,7 +287,7 @@ resource "vcd_nsxv_dnat" "vapp_xyz_web_01_dnat" {
   network_type = "ext"
   network_name = var.external_network_v_pod02_internet
 
-  original_address   = "10.67.39.111" ## TODO
+  original_address   = "10.67.29.111" ## TODO
   translated_address = vcd_vapp_vm.vapp_xyz_web[0].network.0.ip
 }
 
@@ -314,8 +302,19 @@ resource "vcd_nsxv_dnat" "vapp_xyz_web_02_dnat" {
   network_type = "ext"
   network_name = var.external_network_v_pod02_internet
 
-  original_address   = "10.67.39.112" ## TODO
+  original_address   = "10.67.29.112" ## TODO
   translated_address = vcd_vapp_vm.vapp_xyz_web[1].network.0.ip
+}
+
+# IP Sets
+resource "vcd_nsxv_ip_set" "vapp_xyz_web_ipset_internal" {
+  depends_on = [vcd_vapp_vm.vapp_xyz_web]
+
+  org = var.org_name
+  vdc = var.t1_ovdc01_name
+
+  name         = "webservers-internal"
+  ip_addresses = ["192.168.10.2-192.168.10.3"]
 }
 
 # Gateway Firewall
@@ -325,6 +324,7 @@ resource "vcd_nsxv_firewall_rule" "rules_ingress" {
   org = var.org_name
   vdc = var.t1_ovdc01_name
 
+  name         = "Allow Application Traffic"
   edge_gateway = var.t1_edge01_name
 
   source {
@@ -332,11 +332,25 @@ resource "vcd_nsxv_firewall_rule" "rules_ingress" {
   }
 
   destination {
-    ip_addresses = ["any"]
+    ip_addresses = [
+      "10.67.29.0/24",
+    ]
   }
 
   service {
-    protocol = "any"
+    protocol = "icmp"
+  }
+
+  service {
+    port        = "22"
+    protocol    = "tcp"
+    source_port = "any"
+  }
+
+  service {
+    port        = "80"
+    protocol    = "tcp"
+    source_port = "any"
   }
 }
 
@@ -384,7 +398,7 @@ resource "vcd_lb_server_pool" "lb_pool" {
     condition = "enabled"
     name      = "member1"
     #ip_address   = "${vcd_vapp_vm.demo_vm_web[0].network.0.ip}"
-    ip_address   = "192.168.10.2"
+    ip_address   = "192.168.10.2" # TODO
     port         = 80
     monitor_port = 80
     weight       = 1
@@ -394,7 +408,7 @@ resource "vcd_lb_server_pool" "lb_pool" {
     condition = "enabled"
     name      = "member2"
     #ip_address   = "${vcd_vapp_vm.demo_vm_web[1].network.0.ip}"
-    ip_address   = "192.168.10.3"
+    ip_address   = "192.168.10.3" # TODO
     port         = 80
     monitor_port = 80
     weight       = 2

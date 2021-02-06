@@ -25,4 +25,4 @@ variable "external_network_v_pod02_service" {}
 
 variable "t1_edge01_internet_ip" {} # IP address of edge gateway uplink interface on the "internet" external network
 variable "t1_edge02_internet_ip" {} # IP address of edge gateway uplink interface on the "internet" external network
-variable "vapp_xyz_web_dnat_ip_prefix" {}
+#variable "vapp_xyz_web_dnat_ip_prefix" {}
